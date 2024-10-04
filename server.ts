@@ -1,5 +1,6 @@
 import { Context, Hono, MiddlewareHandler, Next } from 'hono'
 import type { IncomingMessage, ServerResponse } from 'http';
+import type { Server } from 'node:http';
 
 import { createRsbuild, loadConfig } from "@rsbuild/core";
 
@@ -68,16 +69,33 @@ app.get("/", async (c, next) => {
 
 app.use(adaptExpressMiddleware(rsbuildServer.middlewares));
 
-const httpServer = app.listen(rsbuildServer.port, () => {
-  // Notify Rsbuild that the custom server has started
-  rsbuildServer.afterListen();
+
+
+const server = Bun.serve({
+  port: rsbuildServer.port,
+  async fetch(req, server) {
+    const response = await app.fetch(req, { IP: server.requestIP(req) })
+    rsbuildServer.afterListen();
+    return response;
+  },
+  maxRequestBodySize: 200_000_000_000,
 });
 
-rsbuildServer.connectWebSocket({ server: httpServer });
+rsbuildServer.connectWebSocket({ server: server as unknown as Server });
 
-return {
-  close: async () => {
-    await rsbuildServer.close();
-    httpServer.close();
-  },
-};
+console.log(`Server is running on port ${server.port}`);
+
+process.on('SIGINT', () => {
+  console.log('Shutting down server...');
+  server.stop();
+  rsbuildServer.close();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('Shutting down server...');
+  server.stop();
+  rsbuildServer.close();
+  process.exit(0);
+});
+
